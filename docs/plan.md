@@ -109,21 +109,21 @@ Unitree G1 29-DoF의 키프레임 모션을 브라우저에서 편집한다. 물
 
 ## 7. Motion Creator 모델과의 차이 (2026-09-28 확인)
 
-IK·보간 알고리즘은 MC와 같다. 동등성은 `tests/test_motioncreator_parity.py`가 확인한다. 이 테스트의 기준값은 **MC 코드를 motion-sim과 같은 URDF로 만든 MuJoCo 모델 위에서 실행한 결과**다(`tests/fixtures/make_motioncreator_reference.py`). MC가 실제로 쓰던 모델은 아래처럼 달라서, 알고리즘 비교에는 쓸 수 없기 때문이다.
+IK·보간 알고리즘은 MC와 같다. 동등성은 `tests/test_motioncreator_parity.py`가 MC 코드로 만든 기준값과 비교해 확인한다(`tests/fixtures/make_motioncreator_reference.py`).
 
-| 항목 | MC | motion-sim | 영향 |
+| 모델 | MC | motion-sim | 패리티 기준값 |
 |---|---|---|---|
-| 기본 g1 모델 | `assets/g1/g1.xml`: `waist_roll_link` z 0.035, `torso_link` z 0.019 | unitree_ros rev_1_0 URDF: `waist_roll_joint` z 0.044, `waist_pitch_joint` z 0 | 허리 pitch 축이 10 mm 다르다. 허리를 움직이면 상체 핸들이 최대 약 11 mm 달라진다. 어깨의 영점 위치는 같다. 정책 학습 모델 `g1_gear_wbc.xml`은 motion-sim과 같은 rev_1_0이다. |
-| g1-tools 도구 좌우 | `tool_model.py`가 도구를 y축으로 미러링하고 부모 손목을 바꾼다. **주걱 = 왼손**, 끝단 받침 = 오른손 | URDF 그대로. **주걱 = 오른손**, 끝단 받침 = 왼손 | 손 TCP 핸들이 약 48.7 mm 다르다. MC g1-tools 프로젝트를 가져오면 도구가 반대 손에 있다. |
+| g1 | `assets/g1/g1.xml`(구형): `waist_roll_link` z 0.035, `torso_link` z 0.019 | unitree_ros rev_1_0 URDF: `waist_roll_joint` z 0.044, `waist_pitch_joint` z 0 | 허리 pitch 축이 10 mm 달라 MC 모델을 그대로 쓸 수 없다. MC 코드를 motion-sim URDF로 만든 MuJoCo 모델에서 실행한다. 정책 학습 모델 `g1_gear_wbc.xml`은 motion-sim과 같은 rev_1_0이다. |
+| g1-tools | `tool_model.py`가 원본 그리퍼 URDF(주걱=오른손)를 좌우 반전해 **주걱 = 왼손**으로 부착 | 생성기 `--scoop-side left`로 만든 **주걱 = 왼손** URDF (실물 장착 방향, 2026-09-28 확인) | 모델이 같으므로 MC의 실제 g1-tools를 그대로 쓴다. TCP는 0.0 mm로 일치한다. |
 
-MC 프로젝트를 가져오면 관절각(qpos)을 그대로 쓴다. 다리와 발은 두 모델이 같으므로 발 고정은 유지되고, 상체 핸들 위치만 위 차이만큼 달라질 수 있다.
+MC g1 프로젝트를 가져오면 관절각(qpos)을 그대로 쓴다. 다리와 발은 두 모델이 같아 발 고정은 유지되고, 허리를 굽힌 자세에서는 상체 핸들 위치가 최대 약 11 mm 달라질 수 있다. MC g1-tools 프로젝트는 기구학이 같다.
 
 ## 8. 리스크
 
 | 리스크 | 대응 |
 |---|---|
 | MC MJCF와 unitree URDF의 기구학 차이 | 7절에 기록. 알고리즘 회귀는 같은 URDF 기준 fixture로 비교 |
-| g1-tools 도구 좌우가 MC와 반대 | URDF(주걱=오른손)를 기준으로 한다. 실물 장착 방향을 사용자에게 확인 |
+| 그리퍼 생성기의 메시 비결정성 | 같은 옵션으로 다시 만들면 URDF는 같지만 끝단 받침 본체 STL 하나가 바이트 단위로 다를 수 있다. 해시 검증은 URDF 기준 |
 | 정책 학습 모델과 URDF의 질량·토크 차이 | `integrations/robot-models.json`의 `isaac_actuators` 결정을 따른다. sim2real 전에 실물 토크 한계 확인 |
 | MuJoCo 관절 마찰·damping을 PhysX로 옮길 때 모델 차이 | v0.3에서 단순 궤적으로 MuJoCo(MC)와 Isaac 추종 결과 비교 |
 | websockets 버전 충돌(Isaac 12.0 vs viser 15.x) | headless 물리 검증됨. 문제 시 편집기 env와 Isaac env 분리 |

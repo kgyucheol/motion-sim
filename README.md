@@ -27,7 +27,7 @@ python -m pytest                            # 회귀 테스트
 | 물리·정책 | Isaac Sim 5.1 단독. 정책은 우선 GR00T Decoupled WBC(Balance/Walk ONNX)만 쓴다. |
 | 프로세스 | 편집 프로세스(viser, IK)는 요청마다 응답한다. Isaac Sim은 기동에 약 40초가 걸리므로 상주 워커로 분리한다. |
 | UI | viser. 타임라인 API가 있는 [kimodo-viser](https://github.com/nv-tlabs/kimodo-viser) fork를 commit으로 고정해 쓴다. |
-| 로봇 모델 | 모델마다 완성 URDF를 통째로 교체한다. `g1`, `g1-tools`(오른손 주걱, 왼손 끝단 받침) |
+| 로봇 모델 | 모델마다 완성 URDF를 통째로 교체한다. `g1`, `g1-tools`(왼손 주걱, 오른손 끝단 받침) |
 | 모터 특성 | 질량·형상은 URDF, armature·마찰·최대 토크는 정책 학습 모델(`g1_gear_wbc.xml`)을 따른다. 자세한 값은 `integrations/robot-models.json`의 `isaac_actuators`에 있다. |
 
 ## 저장소 구성

@@ -1,9 +1,10 @@
 """Motion Creator(MuJoCo)의 IK·보간 알고리즘으로 기준값을 만든다. motion-sim 회귀 테스트용 fixture.
 
-알고리즘만 비교하기 위해, Motion Creator 코드를 motion-sim과 **같은 URDF**로 만든 MuJoCo 모델 위에서 실행한다.
-Motion Creator 자체 모델과의 차이는 docs/plan.md의 "Motion Creator 모델과의 차이"에 기록한다.
-  - Motion Creator assets/g1/g1.xml은 구형 G1이다. 허리 pitch 축이 unitree_ros rev_1_0보다 10 mm 높다.
-  - Motion Creator tool_model.py는 도구를 좌우 반전해 부착한다(주걱=왼손). URDF는 주걱=오른손이다.
+- g1: Motion Creator assets/g1/g1.xml은 구형 G1이라 허리 pitch 축이 unitree_ros rev_1_0보다 10 mm 높다.
+  알고리즘만 비교하기 위해 Motion Creator 코드를 motion-sim과 같은 URDF로 만든 MuJoCo 모델 위에서 실행한다.
+- g1-tools: Motion Creator가 실제로 쓰는 모델(tool_model.py, 주걱=왼손)을 그대로 쓴다. motion-sim URDF도
+  주걱=왼손으로 생성했으므로 모델까지 같아야 한다.
+모델 차이는 docs/plan.md의 "Motion Creator 모델과의 차이"에 기록한다.
 
 실행 (Motion Creator 코드와 MuJoCo 필요. 저장소 루트에서):
   MOTIONCREATOR=/home/kim/motioncreator /home/kim/motioncreator/.conda/bin/python \
@@ -29,8 +30,6 @@ import motioncreator.robot as mc_robot  # noqa: E402
 from motioncreator import motion as mc_motion  # noqa: E402
 
 MODELS = json.loads((REPO / 'integrations/robot-models.json').read_text())['models']
-if not (REPO / MODELS['g1-tools']['urdf']).is_file():
-    MODELS['g1-tools']['urdf'] = str(MOTIONCREATOR / 'assets/g1_scoop_endsupport/g1_29dof_rev_1_0_scoop_endsupport.urdf')
 
 
 def mjcf_from_urdf(urdf_path):
@@ -53,22 +52,13 @@ def mjcf_from_urdf(urdf_path):
 
 
 def motioncreator_robot(model_id, workdir):
-    """Motion Creator Robot running on the motion-sim URDF for `model_id`."""
-    urdf = Path(MODELS[model_id]['urdf'])
-    urdf = urdf if urdf.is_absolute() else REPO / urdf
-    path = Path(workdir) / f'{model_id}.xml'
-    ET.ElementTree(mjcf_from_urdf(urdf)).write(path)
-    mc_robot.MODEL_PATH = path
-    robot = mc_robot.Robot('g1')
+    """g1: Motion Creator Robot on the motion-sim base URDF. g1-tools: Motion Creator's own tool model."""
     if model_id == 'g1-tools':
-        m = robot.model
-        for side in ('left', 'right'):
-            wrist = m.body(f'{side}_wrist_yaw_link').id
-            tcp = m.body(MODELS[model_id]['end_effectors'][side]).id
-            data = robot.data(robot.home)
-            offset = data.xmat[wrist].reshape(3, 3).T @ (data.xpos[tcp] - data.xpos[wrist])
-            robot.handles[f'{side}_hand'] = (f'{side}_wrist_yaw_link', tuple(offset), f'{side} TCP')
-    return robot
+        return mc_robot.Robot('g1-tools')
+    path = Path(workdir) / f'{model_id}.xml'
+    ET.ElementTree(mjcf_from_urdf(REPO / MODELS[model_id]['urdf'])).write(path)
+    mc_robot.MODEL_PATH = path
+    return mc_robot.Robot('g1')
 
 
 def main():

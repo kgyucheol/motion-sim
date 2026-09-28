@@ -17,14 +17,14 @@
     "g1-tools": {
       "urdf": "assets/g1_scoop_endsupport/g1_29dof_rev_1_0_scoop_endsupport.urdf",
       "source": {
-        "generator": "assets/g1_scoop_endsupport/tools/make_gripper_urdf.py",
+        "generator": "assets/g1_scoop_endsupport/tools/make_gripper_urdf.py --scoop-side left",
         "base": "g1 (unitree_ros ccfc6fd)",
-        "copied_from": "motioncreator assets/g1_scoop_endsupport"
+        "note": "실물 장착 방향: 주걱=왼손, 끝단 받침=오른손 (2026-09-28 사용자 확인). Motion Creator g1-tools(좌우 반전 모델)와 TCP 일치."
       },
-      "urdf_sha256": "eb628ea7ceaae0d0655659267c06a64699d5cf6ea8b04af44d1f2299a84d34a7",
+      "urdf_sha256": "a4adda041f53627ac275a3ad4bc8221665d1da9602f384ac8b1c33da817bc384",
       "end_effectors": {
-        "left": "left_end_support_tcp",
-        "right": "right_scoop_tcp"
+        "left": "left_scoop_tcp",
+        "right": "right_end_support_tcp"
       },
       "distribution": "not-in-git: 저장소에 포함하지 않는다. 서버 ~/motionsim/assets/g1_scoop_endsupport에 수동으로 두고 urdf_sha256으로 검증한다."
     }
