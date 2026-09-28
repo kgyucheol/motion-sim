@@ -3,8 +3,10 @@
 Isaac Sim takes ~40 s to start, so the editor starts this process once and reuses it. Each job
 resets the same stage. Protocol (multiprocessing.connection, localhost, authkey):
   editor -> worker  {'type': 'run', 'project': dict, 'hold_seconds': float}
+                    {'type': 'asset_mesh', 'asset': catalog path}
   worker -> editor  {'type': 'progress', 'value': 0..1}
                     {'type': 'result', 'frames': [...], 'summary': {...}, 'settings': {...}}
+                    {'type': 'asset_mesh', 'asset': str, 'vertices': (N, 3) m, 'faces': (M, 3)}
                     {'type': 'error', 'message': str}
   on connect        {'type': 'ready', 'model': str}
 
@@ -37,15 +39,34 @@ def run_job(robot, backend, project, hold_seconds, send):
     verify_assets()
     reference = compile_motion(robot, project, fps=REFERENCE_FPS)['qpos']
     controller = DecoupledController(reference)
+    backend.set_scene(project.get('scene_objects', []))
     seconds = controller.p['upper_body_settle_seconds'] + controller.duration + hold_seconds
     recording, fell = rollout(controller, backend, seconds, progress=lambda value: send({'type': 'progress', 'value': value}))
     final = recording[-1]['qpos'] if recording else reference[0]
     summary = {'fell': fell, 'phase': controller.phase, 'seconds': float(recording[-1]['time']) if recording else 0.,
                'settle_seconds': controller.p['upper_body_settle_seconds'], 'motion_seconds': controller.duration,
                'final_yaw_deg': float(np.rad2deg(Rotation.from_quat(final[3:7][[1, 2, 3, 0]]).as_euler('xyz')[2])),
-               **tracking_summary(recording, reference)}
-    frames = [{'time': float(f['time']), 'motion_time': float(f['motion_time']), 'qpos': f['qpos'].tolist()} for f in recording]
+               **tracking_summary(recording, reference), 'objects': object_summary(project, recording)}
+    frames = [{'time': float(f['time']), 'motion_time': float(f['motion_time']), 'qpos': f['qpos'].tolist(),
+               'objects': f.get('objects', {})} for f in recording]
     return {'type': 'result', 'frames': frames, 'summary': summary, 'settings': backend.settings()}
+
+
+def object_summary(project, recording):
+    """How far each object moved from its authored pose by the end (m, deg)."""
+    import numpy as np
+    from scipy.spatial.transform import Rotation
+    if not recording or 'objects' not in recording[-1]:
+        return {}
+    summary = {}
+    for item in project.get('scene_objects', []):
+        position, wxyz = recording[-1]['objects'][item['id']]
+        start = Rotation.from_quat(np.asarray(item['wxyz'])[[1, 2, 3, 0]])
+        end = Rotation.from_quat(np.asarray(wxyz)[[1, 2, 3, 0]])
+        summary[item['id']] = {'name': item['name'],
+                               'moved_m': float(np.linalg.norm(np.asarray(position) - np.asarray(item['position']))),
+                               'rotated_deg': float(np.rad2deg((end * start.inv()).magnitude()))}
+    return summary
 
 
 def exit_with_parent(parent_pid):
@@ -92,12 +113,17 @@ def main():
                             break
                         if request.get('type') == 'shutdown':
                             return
-                        if request.get('type') != 'run':
-                            connection.send({'type': 'error', 'message': f'unknown request {request.get("type")}'})
-                            continue
                         try:
-                            connection.send(run_job(robot, backend, request['project'], float(request.get('hold_seconds', 1.)),
-                                                    connection.send))
+                            if request.get('type') == 'run':
+                                connection.send(run_job(robot, backend, request['project'],
+                                                        float(request.get('hold_seconds', 1.)), connection.send))
+                            elif request.get('type') == 'asset_mesh':
+                                from motionsim.sim_isaac import export_asset_mesh
+                                vertices, faces = export_asset_mesh(request['asset'])
+                                connection.send({'type': 'asset_mesh', 'asset': request['asset'],
+                                                 'vertices': vertices, 'faces': faces})
+                            else:
+                                connection.send({'type': 'error', 'message': f'unknown request {request.get("type")}'})
                         except Exception as error:   # report any failure to the editor instead of dying
                             traceback.print_exc()
                             connection.send({'type': 'error', 'message': f'{type(error).__name__}: {error}'})

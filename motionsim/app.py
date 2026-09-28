@@ -21,6 +21,7 @@ from .isaac_client import IsaacWorker
 from .motion import (DEFAULT_MOTIONS_DIR, MAX_DURATION, MIN_DURATION, compile_motion, keyframe_times,
                      list_saved, load_project, new_project, save_bundle)
 from .robot import ANGLE_LOCKABLE, FEET, HANDLES, ROTATABLE, Robot
+from .scene_editor import SceneEditor, by_user
 
 FPS = 30
 # Clickable body parts, one selection-button row each: row label -> {button label: handle}.
@@ -66,14 +67,6 @@ def quaternion_angle(a, b):
     return 2 * np.arccos(min(1., abs(float(np.dot(a, b)))))
 
 
-def by_user(handler):
-    """Wrap a GUI callback so it ignores programmatic value changes (viser reports them with client=None)."""
-    def callback(event):
-        if getattr(event, 'client', None) is not None:
-            handler()
-    return callback
-
-
 def display_mesh(path, full):
     """Load a visual mesh; decimate large ones for the browser. IK and Isaac always use the URDF meshes."""
     mesh = trimesh.load(path, force='mesh')
@@ -104,6 +97,7 @@ class Editor:
         self._ik_summary = ''
         self.isaac = IsaacWorker(robot.model_id, port=isaac_port, on_state=self._on_isaac_state)
         self.isaac_result = None
+        self.scene_ui = SceneEditor(self)
 
         self._build_scene(full_meshes)
         self._build_gui()
@@ -171,13 +165,15 @@ class Editor:
     def _render_status(self):
         project = self.project
         frame = project['keyframes'][self.keyframe_index]
-        selected = HANDLES[self.selected][2] if self.selected else '없음'
+        scene_item = self.scene_ui._find(self.scene_ui.selected)
+        selected = HANDLES[self.selected][2] if self.selected else f'물체 · {scene_item["name"]}' if scene_item else '없음'
         pinned = ', '.join(HANDLES[k][2] for k in self.pins) or '없음'
         level, text = self._message
         rows = [('모델', f'<b>{html.escape(self.robot.model_id)}</b>'),
                 ('프로젝트', html.escape(project['name'] or '(이름 없음)')),
                 ('키프레임', f'{self.keyframe_index + 1}/{len(project["keyframes"])} · {html.escape(frame["name"] or "(이름 없음)")}'),
-                ('선택', html.escape(selected)), ('위치 고정', html.escape(pinned))]
+                ('선택', html.escape(selected)), ('위치 고정', html.escape(pinned)),
+                ('장면 물체', f'{len(project.get("scene_objects", []))}개')]
         table = ''.join(f'<tr><td style="color:#57606a;padding:1px 10px 1px 0;white-space:nowrap">{k}</td><td>{v}</td></tr>'
                         for k, v in rows)
         ik = f'<div style="margin-top:6px;color:#57606a;font-size:12px">{self._ik_summary}</div>' if self._ik_summary else ''
@@ -190,7 +186,8 @@ class Editor:
     # ------------------------------------------------------------------- undo
     def _editor_state(self):
         return {'q': self.q.copy(), 'pins': list(self.pins), 'angle_pins': list(self.angle_pins),
-                'keyframes': copy.deepcopy(self.project['keyframes']), 'keyframe_index': self.keyframe_index}
+                'keyframes': copy.deepcopy(self.project['keyframes']), 'keyframe_index': self.keyframe_index,
+                'scene_objects': copy.deepcopy(self.project.get('scene_objects', []))}
 
     def _checkpoint(self, coalesce=None):
         """Save the state before an edit. Repeated edits with the same `coalesce` key within 1 s form one step."""
@@ -211,7 +208,9 @@ class Editor:
             self.pins, self.angle_pins = list(state['pins']), list(state['angle_pins'])
             self.project['keyframes'] = copy.deepcopy(state['keyframes'])
             self.keyframe_index = min(state['keyframe_index'], len(self.project['keyframes']) - 1)
+            self.project['scene_objects'] = copy.deepcopy(state['scene_objects'])
             self.motion = None
+        self.scene_ui.refresh()
         self.show(self.q)
         self._sync_joint_sliders()
         self._sync_selection_gui()
@@ -249,6 +248,8 @@ class Editor:
     def select(self, key):
         if self.playing:
             return
+        if key is not None and self.scene_ui.selected is not None:
+            self.scene_ui.select(None)
         with self.lock:
             self.selected = key
             if self.gizmo is not None:
@@ -410,6 +411,9 @@ class Editor:
                         slider.on_update(by_user(lambda name=name: self._on_joint_slider(name)))
                         self.joint_sliders[name] = slider
 
+        with tabs.add_tab('장면', icon=viser.Icon.BOX):
+            self.scene_ui.build_gui(gui)
+
         with tabs.add_tab('검증', icon=viser.Icon.CHECK):
             gui.add_markdown(ISAAC_HELP)
             self.gui_isaac_state = gui.add_markdown('**Isaac 워커**: 꺼짐')
@@ -511,6 +515,8 @@ class Editor:
             self.gui_name.value = project['name']
         self._ik_summary = ''
         self.select(None)
+        self.scene_ui.selected = None
+        self.scene_ui.refresh()
         self.show(self.q)
         self._sync_joint_sliders()
         self._refresh_keyframe_gui()
@@ -587,6 +593,10 @@ class Editor:
     def _changed(self):
         self.motion = None
         self._refresh_keyframe_gui()
+
+    def _changed_scene(self):
+        """Scene edits do not change the kinematic motion; they only affect the next Isaac check."""
+        self._render_status()
 
     def _on_keyframe_dropdown(self):
         options = self._keyframe_options()
@@ -775,6 +785,7 @@ class Editor:
         if motion is None:
             return
         self.select(None)
+        self.scene_ui.select(None)
         self.playing = True
         self._status('재생 중입니다. 재생 중에는 편집할 수 없습니다.')
         threading.Thread(target=self._play_loop, args=(motion,), daemon=True).start()
@@ -852,6 +863,14 @@ class Editor:
                 ('다리·허리', f'RMSE {s["lower_rmse_deg"]:.2f}° (정책이 걸음을 만들므로 저작 자세와 다를 수 있음)'),
                 ('루트 위치', f'최대 오차 {s.get("max_root_error_m", 0.):.3f} m · yaw 최대 오차 {s.get("max_yaw_error_deg", 0.):.1f}°'),
                 ('조건', f'Isaac Sim 물리 {1 / result["settings"]["physics_dt"]:.0f} Hz · 정책 50 Hz · 모델 {html.escape(self.robot.model_id)}')]
+        if s['motion_seconds'] == 0:
+            rows.insert(1, ('참고', '키프레임이 하나뿐이라 준비 구간과 유지 구간에서 서 있기만 검증했습니다.'))
+        objects = s.get('objects', {})
+        if objects:
+            moved = [f'{html.escape(o["name"])} {o["moved_m"] * 100:.1f} cm · {o["rotated_deg"]:.0f}°'
+                     for o in sorted(objects.values(), key=lambda o: -o['moved_m']) if o['moved_m'] > .01 or o['rotated_deg'] > 5]
+            largest = max(o['moved_m'] for o in objects.values()) * 1000
+            rows.insert(-1, ('물체', '<br>'.join(moved) if moved else f'{len(objects)}개 모두 제자리 (최대 {largest:.1f} mm)'))
         table = ''.join(f'<tr><td style="color:#57606a;padding:2px 10px 2px 0;white-space:nowrap;vertical-align:top">{k}</td>'
                         f'<td>{v}</td></tr>' for k, v in rows)
         return f'<div style="font-size:13px;line-height:1.5"><table style="border-collapse:collapse">{table}</table></div>'
@@ -860,6 +879,7 @@ class Editor:
         if self.playing or self.isaac_result is None:
             return
         self.select(None)
+        self.scene_ui.select(None)
         self.playing = True
         self._status('Isaac 물리 결과를 재생합니다 (준비 2초 포함).')
         threading.Thread(target=self._replay_loop, args=(self.isaac_result['frames'],), daemon=True).start()
@@ -870,12 +890,14 @@ class Editor:
             if not self.playing:
                 break
             self.show(np.asarray(frame['qpos']))
+            self.scene_ui.show_poses(frame.get('objects', {}))
             self.server.timeline.set_current_frame(round(frame['motion_time'] * FPS))
             delay = start + frame['time'] - time.perf_counter()
             if delay > 0:
                 time.sleep(delay)
         self.playing = False
         self.show(self.q)
+        self.scene_ui.show_authored()
         self._status('Isaac 결과 재생을 마쳤습니다.')
 
 

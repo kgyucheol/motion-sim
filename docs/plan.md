@@ -57,7 +57,8 @@ Unitree G1 29-DoF의 키프레임 모션을 브라우저에서 편집한다. 물
   "coordinate_system": "right-handed, +X forward, +Y left, +Z up",
   "units": {"position": "m", "angle": "rad", "time": "s"},
   "keyframes": [{"name": "", "duration": 2.0, "qpos": [], "pins": [], "angle_pins": []}],
-  "current_qpos": [], "pins": [], "angle_pins": []
+  "current_qpos": [], "pins": [], "angle_pins": [],
+  "scene_objects": []   // v0.2, 10.1절
 }
 ```
 
@@ -77,7 +78,7 @@ Unitree G1 29-DoF의 키프레임 모션을 브라우저에서 편집한다. 물
 |---|---|---|---|
 | **v0.1 기구학 편집기** | Pinocchio Robot(FK/IK), 프로젝트·보간·저장, viser 편집기(핸들 드래그, 회전, 관절 슬라이더, pin, 키프레임, 타임라인, 재생, 저장·열기), MC 프로젝트 가져오기 | MC fixture 회귀 테스트 통과, 브라우저에서 저작·재생·저장 가능 | 완료. UI 개편, 실행 취소 포함 |
 | **v0.3 Isaac + Decoupled WBC** | 상주 워커, URDF 가져오기, 모터 특성 적용, 정책 관측 구성, replay | 저작 모션을 Isaac에서 WBC로 추종하고 결과를 편집기에서 재생 | 완료. 7절 |
-| v0.2 장면 | 기본 도형과 USD/GLB 물체 배치, 그룹, 지면 고정 | 물체가 저장·복원되고 Isaac 장면 빌더 입력으로 쓸 수 있음 | 다음 |
+| **v0.2 장면** | 기본 도형과 Isaac 에셋 배치, 바닥 배치, Isaac 검증에 장면 포함 | 물체가 저장·복원되고 Isaac 장면 빌더 입력으로 쓸 수 있음 | 완료. 10절. 물체 그룹과 GLB 가져오기는 제외 |
 | v0.4 양손 파지 | 상자 접촉면 지정, 파지 자세 맞춤, Isaac 접촉력 검증 | 상자를 들고 옮기는 모션의 접촉력·미끄러짐 기록 | |
 | v0.5 내보내기 | Kimodo NPZ 등 외부 형식 | MC와 같은 NPZ 계약 | |
 
@@ -176,3 +177,43 @@ MC g1 프로젝트를 가져오면 관절각(qpos)을 그대로 쓴다. 다리�
 | 공유 GPU 서버에서 Isaac 워커가 남는 문제 | 워커가 편집기 프로세스를 감시해 편집기가 끝나면 스스로 종료. 워커는 버튼이나 `--isaac`으로만 시작 |
 | websockets 버전 충돌(Isaac 12.0 vs viser 15.x) | headless 물리 검증됨. 문제 시 편집기 env와 Isaac env 분리 |
 | viser fork 의존 | commit 고정, Apache-2.0 |
+
+## 10. v0.2 장면
+
+### 10.1 구조와 계약
+
+| 파일 | 책임 |
+|---|---|
+| `motionsim/scene.py` | 물체 계약(아래), 검증, 기본 도형 메시, 바닥 배치, Isaac 에셋 메시 캐시(`~/.cache/motionsim/isaac_assets`), Motion Creator 물체 변환 |
+| `motionsim/scene_editor.py` | 편집기 `장면` 탭: 도형·에셋 추가, 물체 선택·기즈모 이동, 속성 편집, 복제·삭제, 물리 재생 표시 |
+| `integrations/isaac-assets.json` | Isaac 5.1 에셋 카탈로그(8종): 경로, 실측 크기, 질량, 고정 전용 여부 |
+| `sim_isaac.py` `set_scene` | 작업마다 물체를 다시 만든다. 기본 도형은 Isaac core 물체, 에셋은 USD 참조 + 강체·질량 보정. 물체 자세를 25 Hz로 기록 |
+| `scripts/scene_check.py` | 에셋 크기·정지 안정성·표면 높이 회귀(`pytest -m isaac`) |
+
+물체 필드: `id`(obj_ + hex 8), `name`, `kind`(box·sphere·cylinder·asset), `asset`(카탈로그 경로), `position`, `wxyz`, `size`(도형 전체 치수), `scale`(에셋), `mass_kg`(에셋은 null이면 에셋 값), `friction`(도형), `color`, `opacity`, `fixed`. 최대 32개. 예전 프로젝트에 `scene_objects`가 없으면 빈 목록으로 본다.
+
+에셋 메시는 `pxr`가 Isaac 안에서만 동작하므로 워커가 USD에서 추출하고, 편집기는 2만 삼각형 이하로 줄여 캐시한다. 처음 쓰는 에셋은 워커가 켜져 있어야 추가할 수 있다.
+
+### 10.2 검증 결과 (2026-09-28, `pytest -m isaac`)
+
+| 항목 | 결과 |
+|---|---|
+| 에셋 8종 메시 크기 vs 카탈로그 | 최대 0.49 mm 차이 |
+| 에셋 2초 정지 드리프트 | 최대 1.4 mm (YCB 물체가 충돌체 두께만큼 내려앉음) |
+| 고정 팔레트 위에 떨어뜨린 상자 | 기대 높이와 −0.03 mm |
+| 0.5 m에서 떨어뜨린 상자 | 반높이 0.15 m에 0.0 mm로 안착 |
+| WBC 검증에 물체 포함 | 로봇 완주, 바닥의 KLT 상자 1.1 mm 이동, 고정 팔레트 0 mm |
+
+### 10.3 발견한 문제와 결정
+
+- **단위 선언을 믿지 않는다.** `packing_table.usd`는 metersPerUnit 0.01(cm)을 선언하지만 좌표값은 이미 미터 크기다(2.47 m). 에셋 좌표값을 미터로 보고, Isaac에서는 불러온 크기를 재서 카탈로그 치수에 맞춘다(보정값 1.0으로 측정).
+- **`SingleRigidPrim`의 기본값 `reset_xform_properties=True`는 쓰지 않는다.** 강체 prim의 원래 변환을 지워, 에셋의 자식 강체를 13 cm 옮겼다.
+- **강체가 자식 prim이면 루트 기준 자세로 되돌려 보고한다.** 이때 에셋 prim의 비균일 배율(`xformOp:scale:unitsResolve`)을 축별로 제거해야 한다.
+- **고정 전용 에셋:** 포장 테이블(강체는 위의 컨테이너뿐)과 팔레트(동적으로 두면 충돌체가 시각 메시보다 아래로 확장되어 1초에 10 cm 가라앉음)는 고정 물체로만 쓴다.
+- 장면을 바꾸기 전에 시뮬레이션을 멈춘다. 실행 중인 PhysX 장면에서 강체를 지우지 않기 위해서다.
+
+### 10.4 남은 한계
+
+- 물체 그룹, GLB·스캔 가져오기, 물체 간 겹침 방지는 없다(Motion Creator에는 있음).
+- 에셋 마찰은 에셋에 정의된 재질을 그대로 쓴다. 도형만 마찰 계수를 바꿀 수 있다.
+- 편집기의 기구학 재생에서는 물체가 움직이지 않는다. 물체 움직임은 Isaac 검증 결과 재생에서만 본다.

@@ -2,7 +2,7 @@
 
 Unitree G1 29-DoF의 키프레임 모션을 편집하고, Isaac Sim에서 GR00T Decoupled WBC 정책으로 sim2sim 검증하는 편집툴이다. 이전 프로젝트 Motion Creator(MuJoCo + React)의 경험을 바탕으로 Isaac Sim + viser로 다시 만든다. 이전 설계는 [`docs/motioncreator-architecture.md`](docs/motioncreator-architecture.md)에 있다.
 
-> 상태: v0.1 기구학 편집기 + v0.3 Isaac·Decoupled WBC 검증. 계획, 로드맵, 검증 결과는 [`docs/plan.md`](docs/plan.md)에 있다.
+> 상태: v0.1 기구학 편집기 + v0.3 Isaac·Decoupled WBC 검증 + v0.2 장면. 다음은 v0.4 양손 파지. 계획, 로드맵, 검증 결과는 [`docs/plan.md`](docs/plan.md)에 있다.
 
 ## 편집기 실행
 
@@ -14,6 +14,7 @@ python -m pytest                            # 회귀 테스트 (Isaac 제외, �
 python -m pytest -m isaac                   # Isaac vs MuJoCo sim2sim 회귀 (약 30초, GPU)
 ```
 
+- `장면` 탭: 상자·공·원기둥과 Isaac 에셋(KLT 상자, YCB 물체, 골판지 상자, 팔레트, 포장 테이블 등)을 배치한다. 물체를 클릭해 기즈모로 옮기고 크기·질량·마찰·색·고정을 바꾼다. 처음 쓰는 에셋은 Isaac 워커가 켜져 있어야 모양을 받아 온다.
 - `검증` 탭: Isaac 워커를 시작하고(첫 기동 약 40초, 이후 약 10초), 현재 키프레임 모션을 Isaac 물리에서 GR00T Decoupled WBC로 추종시킨다. 완주·낙상과 추종 오차를 보여 주고 물리 결과를 재생한다. 워커는 편집기가 끝나면 함께 종료된다.
 
 - 파란 구를 클릭하면 선택되고 기즈모가 붙는다. 이동·회전하면 전신 IK로 자세를 맞춘다. 빨간 구는 위치 고정된 부위다.
@@ -41,9 +42,11 @@ python -m pytest -m isaac                   # Isaac vs MuJoCo sim2sim 회귀 (�
 | `assets/g1_scoop_endsupport/` | g1-tools 커스텀 그리퍼 URDF. **저장소에 포함하지 않는다.** 서버에 수동으로 둔다. |
 | `external/decoupled-wbc/` | Decoupled WBC ONNX 정책과 참조 MJCF/yaml. git 제외. `scripts/setup-decoupled-wbc.sh`로 준비한다. |
 | `integrations/` | 모델·정책 자산 manifest(SHA-256), Decoupled WBC 제어 파라미터 |
-| `motionsim/` | `robot.py`(Pinocchio FK·IK), `motion.py`(프로젝트·보간·저장), `app.py`(viser 편집기), `wbc.py`(Decoupled WBC 제어기), `sim_isaac.py`·`isaac_worker.py`·`isaac_client.py`(Isaac 백엔드와 상주 워커), `sim_mujoco.py`(검증용 MuJoCo 백엔드) |
+| `motionsim/` | `robot.py`(Pinocchio FK·IK), `motion.py`(프로젝트·보간·저장), `app.py`(viser 편집기), `scene.py`·`scene_editor.py`(장면 물체), `wbc.py`(Decoupled WBC 제어기), `sim_isaac.py`·`isaac_worker.py`·`isaac_client.py`(Isaac 백엔드와 상주 워커), `sim_mujoco.py`(검증용 MuJoCo 백엔드) |
 | `tests/` | Motion Creator 동등성(IK·보간·WBC 제어기), 프로젝트 계약, 편집기 상태, Isaac sim2sim 테스트 |
 | `scripts/sim2sim_check.py` | 같은 제어기·같은 모션으로 Isaac과 MuJoCo 결과 비교 |
+| `scripts/scene_check.py` | Isaac 에셋 크기, 정지 안정성, 표면 높이 확인 |
+| `integrations/isaac-assets.json` | 장면에 쓸 수 있는 Isaac 5.1 에셋 카탈로그 |
 | `scripts/` | env 설치, 자산 준비, 검증 |
 | `requirements.lock.txt` | `motionsim` env의 정확한 패키지 버전 |
 

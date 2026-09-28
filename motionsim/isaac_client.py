@@ -22,6 +22,7 @@ class IsaacWorker:
         self.process = None
         self.connection = None
         self.lock = threading.Lock()
+        self.exchange_lock = threading.Lock()
         self.log_path = Path(tempfile.gettempdir()) / f'motionsim_isaac_worker_{port}.log'
 
     def _set(self, state, detail=''):
@@ -62,29 +63,43 @@ class IsaacWorker:
             return
         self._set('failed', f'{STARTUP_TIMEOUT:.0f}초 안에 워커가 준비되지 않았습니다. 로그: {self.log_path}')
 
+    def _exchange(self, message, on_progress=None):
+        """Send one request and wait for its final reply. One request at a time on the connection."""
+        with self.exchange_lock:
+            if self.connection is None or self.state not in ('ready', 'running'):
+                raise RuntimeError('Isaac 워커가 준비되지 않았습니다. 검증 탭에서 워커를 먼저 시작하세요.')
+            try:
+                self.connection.send(message)
+                while True:
+                    reply = self.connection.recv()
+                    if reply['type'] != 'progress':
+                        return reply
+                    if on_progress is not None:
+                        on_progress(reply['value'])
+            except (EOFError, OSError) as error:
+                self._set('failed', f'워커와 연결이 끊겼습니다: {error}. 로그: {self.log_path}')
+                raise RuntimeError('Isaac 워커와 연결이 끊겼습니다.') from error
+
     def run(self, project, on_progress, hold_seconds=1.):
-        """Blocking: send one job and return the worker's result or error message."""
-        with self.lock:
-            if self.state != 'ready':
-                raise RuntimeError('Isaac 워커가 준비되지 않았습니다.')
-            self._set('running', 'Isaac에서 계산 중입니다.')
+        """Blocking: run one motion and return the worker's result or error message."""
+        if self.state != 'ready':
+            raise RuntimeError('Isaac 워커가 준비되지 않았습니다.')
+        self._set('running', 'Isaac에서 계산 중입니다.')
         try:
-            self.connection.send({'type': 'run', 'project': project, 'hold_seconds': hold_seconds})
-            while True:
-                message = self.connection.recv()
-                if message['type'] == 'progress':
-                    on_progress(message['value'])
-                else:
-                    return message
-        except (EOFError, OSError) as error:
-            self._set('failed', f'워커와 연결이 끊겼습니다: {error}. 로그: {self.log_path}')
-            raise RuntimeError('Isaac 워커와 연결이 끊겼습니다.') from error
+            return self._exchange({'type': 'run', 'project': project, 'hold_seconds': hold_seconds}, on_progress)
         finally:
             if self.state == 'running':
                 self._set('ready', f'모델 {self.model_id}')
 
+    def asset_mesh(self, asset):
+        """Blocking: (vertices m, faces) of an Isaac catalog asset, exported by the worker."""
+        reply = self._exchange({'type': 'asset_mesh', 'asset': asset})
+        if reply['type'] != 'asset_mesh':
+            raise RuntimeError(f'에셋 메시를 가져오지 못했습니다: {reply.get("message")}')
+        return reply['vertices'], reply['faces']
+
     def stop(self):
-        with self.lock:
+        with self.lock, self.exchange_lock:
             if self.connection is not None:
                 try:
                     self.connection.send({'type': 'shutdown'})

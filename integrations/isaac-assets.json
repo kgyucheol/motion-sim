@@ -1,0 +1,20 @@
+{
+  "asset_root": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/",
+  "notes": [
+    "경로는 Isaac 에셋 루트 기준이다. 워커는 isaacsim.storage.native.get_assets_root_path()를 먼저 쓰고, 없으면 asset_root를 쓴다.",
+    "2026-09-28 Isaac 5.1에서 확인: 모두 Z축 위. packing_table만 metersPerUnit 0.01(cm)이며 워커가 배율로 보정한다.",
+    "rigid=false인 에셋은 강체가 없어 워커가 루트에 RigidBodyAPI를 추가한다(고정이 아닐 때). 모든 항목에 충돌체가 있다."
+  ],
+  "assets": [
+    {"path": "Isaac/Props/KLT_Bin/small_KLT.usd", "name": "KLT 상자 (소)", "size_m": [0.198, 0.297, 0.146], "mass_kg": 0.56, "rigid": true},
+    {"path": "Isaac/Environments/Simple_Warehouse/Props/SM_CardBoxA_01.usd", "name": "골판지 상자 A", "size_m": [0.7, 0.5, 0.5], "mass_kg": null, "rigid": false},
+    {"path": "Isaac/Props/YCB/Axis_Aligned_Physics/003_cracker_box.usd", "name": "크래커 상자 (YCB)", "size_m": [0.164, 0.213, 0.072], "mass_kg": 0.411, "rigid": true},
+    {"path": "Isaac/Props/YCB/Axis_Aligned_Physics/004_sugar_box.usd", "name": "설탕 상자 (YCB)", "size_m": [0.093, 0.176, 0.045], "mass_kg": 0.514, "rigid": true},
+    {"path": "Isaac/Props/YCB/Axis_Aligned_Physics/006_mustard_bottle.usd", "name": "머스터드 병 (YCB)", "size_m": [0.096, 0.191, 0.058], "mass_kg": 0.603, "rigid": true},
+    {"path": "Isaac/Props/Blocks/basic_block.usd", "name": "블록", "size_m": [0.047, 0.047, 0.047], "mass_kg": 0.02, "rigid": true},
+    {"path": "Isaac/Props/Pallet/pallet.usd", "name": "팔레트", "size_m": [1.213, 0.802, 0.143], "mass_kg": 25.0, "rigid": false,
+     "fixed_only": true, "note": "동적 강체로 두면 boundingCube 충돌체가 시각 메시보다 아래로 확장되어 1초에 10 cm 가라앉는다(2026-09-28 측정). 고정 물체로만 쓴다."},
+    {"path": "Isaac/Props/PackingTable/packing_table.usd", "name": "포장 테이블", "size_m": [2.474, 0.778, 1.083], "mass_kg": null, "rigid": false,
+     "fixed_only": true, "note": "테이블 본체는 정적 충돌체이고 강체는 위에 놓인 컨테이너(container_h20)뿐이라 고정 물체로만 쓴다."}
+  ]
+}

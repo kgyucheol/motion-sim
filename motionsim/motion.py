@@ -16,6 +16,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from .robot import ANGLE_LOCKABLE, BASIC_ROTATABLE as ROTATABLE, FEET, HANDLES, HINGES, ROOT, Robot, matrix_quat, quat_matrix
+from .scene import from_motioncreator, validate_objects
 
 FORMAT = 'motionsim.g1.v1'
 MOTIONCREATOR_FORMAT = 'motioncreator.g1.v1'
@@ -38,7 +39,7 @@ def new_project(robot: Robot, name=''):
             'coordinate_system': COORDINATE_SYSTEM, 'units': dict(UNITS),
             'keyframes': [{'name': 'Stand', 'duration': 2., 'qpos': robot.home.tolist(),
                            'pins': list(FEET), 'angle_pins': []}],
-            'current_qpos': robot.home.tolist(), 'pins': list(FEET), 'angle_pins': []}
+            'current_qpos': robot.home.tolist(), 'pins': list(FEET), 'angle_pins': [], 'scene_objects': []}
 
 
 def validate_project(robot: Robot, project):
@@ -72,6 +73,7 @@ def validate_project(robot: Robot, project):
     if project.get('current_qpos') is not None:
         project['current_qpos'] = robot.validate_q(project['current_qpos']).tolist()
     _validate_pins(project)
+    validate_objects(project.setdefault('scene_objects', []))
     project['model_id'] = robot.model_id
     project['model_sha256'] = robot.fingerprint
     return project
@@ -105,9 +107,15 @@ def import_motioncreator_project(robot: Robot, source):
     project['source'] = {'format': MOTIONCREATOR_FORMAT, 'project_id': source.get('project_id'),
                          'model_sha256': source.get('model_sha256')}
     warnings = []
-    ignored = [key for key in ('scene_objects', 'scene_groups', 'box') if source.get(key)]
+    for item in source.get('scene_objects', []):
+        converted, warning = from_motioncreator(item, project['scene_objects'])
+        if converted is not None:
+            project['scene_objects'].append(converted)
+        if warning:
+            warnings.append(warning)
+    ignored = [key for key in ('scene_groups', 'box') if source.get(key)]
     if ignored:
-        warnings.append('장면 정보는 아직 지원하지 않아 무시했습니다: ' + ', '.join(ignored))
+        warnings.append('물체 그룹과 구형 box 필드는 지원하지 않아 무시했습니다: ' + ', '.join(ignored))
     if any(frame.get('grasp') for frame in frames):
         warnings.append('키프레임 파지 설정은 아직 지원하지 않아 무시했습니다')
     warnings.append('Motion Creator(MJCF)와 motion-sim(URDF)의 기구학 차이로 고정 핸들 위치가 미세하게 다를 수 있습니다')
@@ -259,6 +267,7 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, save_as=False):
                 'coordinate_system': COORDINATE_SYSTEM, 'units': UNITS,
                 'trajectory_type': 'kinematic reference',
                 'interpolation': 'quintic easing, shortest-path root SLERP, orientation-aware IK for shared pins',
+                'scene_objects': len(project['scene_objects']),
                 'validation': {'kind': 'kinematic only', 'max_pin_error_mm': motion['max_pin_error_mm'],
                                'minimum_sole_height_mm': min(floor),
                                'max_joint_speed_rad_s': float(np.abs(motion['qvel'][:, 6:]).max()),

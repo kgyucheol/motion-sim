@@ -104,14 +104,23 @@ def test_keyframe_times_ignore_first_duration(robot, reach):
 
 def test_import_motioncreator_project(robot, reach):
     source = {'format': 'motioncreator.g1.v1', 'name': 'mc', 'project_id': 'a' * 32, 'model_sha256': 'b' * 64,
-              'joint_names': robot.names, 'scene_objects': [{'id': 'box'}],
+              'joint_names': robot.names,
+              'scene_objects': [{'id': 'legacy-box', 'name': '박스 1', 'shape': 'box', 'position': [.4, 0, .12],
+                                 'quaternion_xyzw': [0, 0, .70710678, .70710678], 'size': [.3, .5, .24], 'mass_kg': 1,
+                                 'friction': .7, 'color': '#ff8400', 'opacity': .5, 'visible': True},
+                                {'id': 'glb', 'name': '스캔', 'shape': 'box', 'position': [0, 0, 0], 'quaternion_xyzw': [0, 0, 0, 1],
+                                 'size': [.1, .1, .1], 'asset_id': 'f' * 64}],
               'keyframes': [{'name': 'Stand', 'duration': 2., 'qpos': robot.home.tolist(), 'pins': list(FEET)},
                             {'name': 'reach', 'duration': 1., 'qpos': reach.tolist(), 'pins': list(FEET),
                              'grasp': {'object_id': 'box'}}]}
     project, warnings = import_motioncreator_project(robot, source)
     assert project['format'] == FORMAT and len(project['keyframes']) == 2
     assert project['source']['project_id'] == 'a' * 32
-    assert any('장면' in w for w in warnings) and any('파지' in w for w in warnings)
+    [box] = project['scene_objects']
+    assert box['kind'] == 'box' and box['name'] == '박스 1' and box['size'] == [.3, .5, .24]
+    np.testing.assert_allclose(box['wxyz'], [.70710678, 0, 0, .70710678])   # xyzw -> wxyz
+    assert box['color'] == '#ff8400' and box['friction'] == .7
+    assert any('GLB' in w for w in warnings) and any('파지' in w for w in warnings)
     clip = dict(source, keyframes=[dict(source['keyframes'][0], samples=[robot.home.tolist()])])
     with pytest.raises(ValueError, match='클립'):
         import_motioncreator_project(robot, clip)
