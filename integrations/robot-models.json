@@ -1,0 +1,83 @@
+{
+  "models": {
+    "g1": {
+      "urdf": "assets/g1/g1_29dof_rev_1_0.urdf",
+      "source": {
+        "url": "https://github.com/unitreerobotics/unitree_ros",
+        "revision": "ccfc6fd",
+        "path": "robots/g1_description"
+      },
+      "urdf_sha256": "c0ae739c640c3e2c00d1bdd8810b5d6e59601487bd1a3995859f9543269ee5c8",
+      "end_effectors": {
+        "left": "left_rubber_hand",
+        "right": "right_rubber_hand"
+      },
+      "distribution": "in-git (BSD-3-Clause, assets/g1/LICENSE_unitree_ros)"
+    },
+    "g1-tools": {
+      "urdf": "assets/g1_scoop_endsupport/g1_29dof_rev_1_0_scoop_endsupport.urdf",
+      "source": {
+        "generator": "assets/g1_scoop_endsupport/tools/make_gripper_urdf.py",
+        "base": "g1 (unitree_ros ccfc6fd)",
+        "copied_from": "motioncreator assets/g1_scoop_endsupport"
+      },
+      "urdf_sha256": "eb628ea7ceaae0d0655659267c06a64699d5cf6ea8b04af44d1f2299a84d34a7",
+      "end_effectors": {
+        "left": "left_end_support_tcp",
+        "right": "right_scoop_tcp"
+      },
+      "distribution": "not-in-git: 저장소에 포함하지 않는다. 서버 ~/motionsim/assets/g1_scoop_endsupport에 수동으로 두고 urdf_sha256으로 검증한다."
+    }
+  },
+  "verified_2026_09_28": {
+    "g1_vs_g1_tools": "링크 관성·관절 29개 동일, 차이는 손(rubber hand ↔ 도구 링크·TCP)뿐. 공유 메시 33개 바이트 동일.",
+    "joint_order_vs_policy_mjcf": "URDF revolute 순서 = g1_gear_wbc.xml hinge 순서",
+    "differences_vs_policy_mjcf": {
+      "effort_limit_Nm": {
+        "ankle_pitch/roll, waist_roll/pitch": {
+          "urdf": 35.0,
+          "policy_mjcf": 50.0
+        }
+      },
+      "mass_kg": {
+        "torso_link": {
+          "urdf": 6.78,
+          "policy_mjcf": 7.818
+        },
+        "wrist_yaw_link(each)": {
+          "urdf": 0.0846,
+          "policy_mjcf": 0.4574
+        }
+      },
+      "total_mass_kg": {
+        "urdf_g1": 33.341,
+        "policy_mjcf": 34.394
+      },
+      "hands": "policy MJCF는 Dex3 손가락 링크(관절 주석 처리, 고정)를 포함하고 URDF g1은 rubber hand",
+      "joint_defaults_policy_mjcf": {
+        "armature": 0.01,
+        "damping": 0.001,
+        "frictionloss": 0.1
+      }
+    }
+  },
+  "isaac_actuators": {
+    "decision_2026_09_28": "질량·관성·형상은 각 모델의 URDF를 따르고, 모터 특성은 정책 학습 모델 g1_gear_wbc.xml을 따른다.",
+    "mujoco_joint_defaults": {
+      "armature": 0.01,
+      "damping": 0.001,
+      "frictionloss": 0.1,
+      "note": "MuJoCo 기준 값이다. PhysX joint 속성으로 옮길 때 단위와 모델 차이를 구현에서 확인한다."
+    },
+    "effort_limit_override_Nm": {
+      "left_ankle_pitch_joint": 50.0,
+      "left_ankle_roll_joint": 50.0,
+      "right_ankle_pitch_joint": 50.0,
+      "right_ankle_roll_joint": 50.0,
+      "waist_roll_joint": 50.0,
+      "waist_pitch_joint": 50.0
+    },
+    "pd_gains": "integrations/decoupled-wbc-parameters.json: lower_kp/lower_kd(다리 12 + 허리 3), arm_kp/arm_kd(팔 14)",
+    "sim2real_note": "URDF의 해당 관절 effort는 35 Nm다. 실물 펌웨어 토크 한계를 sim2real 전에 확인한다."
+  }
+}

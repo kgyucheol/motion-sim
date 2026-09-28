@@ -1,0 +1,38 @@
+{
+  "source": {
+    "url": "https://github.com/NVlabs/GR00T-WholeBodyControl",
+    "revision": "087f9ac01d46f6d8e4d0b73c01ae64799f292a38"
+  },
+  "assets": [
+    {
+      "file": "g1_gear_wbc.xml",
+      "sha256": "3b0b5a1c8299fda85cf328cc2a8df53ccc765ce37f20030175295049947b1a19",
+      "bytes": 38507
+    },
+    {
+      "file": "GR00T-WholeBodyControl-Balance.onnx",
+      "sha256": "f645da599d4ca3d29ed273c8f4712620bb680d34977469ca3aeabe5bb9631c18",
+      "bytes": 1886682
+    },
+    {
+      "file": "GR00T-WholeBodyControl-Walk.onnx",
+      "sha256": "7c82255b6905ffcc4468fa7f8ddcf7b70db168cf1042107ccab887cb6a8e5407",
+      "bytes": 1886682
+    },
+    {
+      "file": "LICENSE",
+      "sha256": "24ab66be50d1aca4fc5e029ef76ce4ceaac6557ea21665caf4b140695a76ffee",
+      "bytes": 8886
+    },
+    {
+      "file": "g1_gear_wbc.yaml",
+      "sha256": "31226a224ca8450e89d9ce17d5cb31c052192a9cbfedc8d145f1cb95627ac7a2",
+      "bytes": 1011
+    }
+  ],
+  "target_dir": "external/decoupled-wbc",
+  "notes": [
+    "g1_gear_wbc.xml와 g1_gear_wbc.yaml은 정책 학습·sim2mujoco 기준 파라미터 참조용이다. Isaac 로봇 모델은 assets/의 URDF를 사용한다.",
+    "upstream yaml의 policy_path(ft92.onnx, ft109.onnx)는 저장소에 없는 파일명이다. 실제 정책은 Balance/Walk ONNX를 사용한다."
+  ]
+}

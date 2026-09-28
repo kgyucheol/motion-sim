@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+
+# 외부 정책·모델 자산: scripts/setup-decoupled-wbc.sh로 준비하고 integrations manifest로 검증한다.
+external/
+
+# 커스텀 그리퍼(g1-tools) 자산은 공개 저장소에 올리지 않는다. 서버에 수동으로 두고 SHA-256으로 검증한다.
+assets/g1_scoop_endsupport/
