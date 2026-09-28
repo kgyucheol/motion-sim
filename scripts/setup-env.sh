@@ -32,6 +32,7 @@ pip install -c "$constraints" \
   pin==2.7.0 \
   onnxruntime==1.30.0 \
   pytest==8.4.2 \
+  fast_simplification==0.2.0 \
   "viser @ git+https://github.com/nv-tlabs/kimodo-viser.git@7c82ad8f8640bad9dff8ded5c5eee908eeb08f11"
 
 python - <<'PY'
