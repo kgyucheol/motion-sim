@@ -1,0 +1,130 @@
+# motion-sim 기획
+
+> 기준일: 2026-09-28 · 대상: 이 저장소를 개발하는 사람과 AI 에이전트
+> 이전 프로젝트 설계는 [`motioncreator-architecture.md`](motioncreator-architecture.md)를 참고한다. 이 문서는 그중 무엇을 가져오고 무엇을 바꾸는지를 정한다.
+
+## 1. 목표
+
+Unitree G1 29-DoF의 키프레임 모션을 브라우저에서 편집한다. 물체를 배치하고 상자를 양손으로 파지하는 장면까지 저작한 뒤, Isaac Sim에서 GR00T Decoupled WBC로 추종시켜 sim2sim으로 검증한다. 이 프로젝트의 목적은 **편집툴**이다. sim2real은 sim2sim 이후 별도로 진행한다.
+
+## 2. Motion Creator와의 관계
+
+| 영역 | Motion Creator | motion-sim | 이유 |
+|---|---|---|---|
+| 모션 표현 | 수동 키프레임, `duration` = 직전 키프레임에서 오는 시간 | **그대로** | 검증된 의미. 파라미터 segment 방식은 채택하지 않음 |
+| 편집 IK | SciPy bounded least-squares, MuJoCo FK/Jacobian | **알고리즘 유지, FK/Jacobian은 Pinocchio** | URDF 하나를 Isaac과 공유. MC 결과와 회귀 비교 |
+| 보간 | quintic easing, root SLERP, 공통 pin은 IK로 재투영 | **그대로** | |
+| 로봇 모델 | MJCF(g1), URDF→MJCF 변환(g1-tools) | **완성 URDF 통째 교체** | Pinocchio와 Isaac이 같은 파일을 읽음 |
+| UI | React + Three.js, FastAPI | **viser(kimodo-viser fork), Python 단일 프로세스** | 타임라인 API 제공, 프런트 빌드 불필요 |
+| 물리 | MuJoCo PD / SONIC / Decoupled WBC | **Isaac Sim 상주 워커 + Decoupled WBC** | 물리 기준을 Isaac 하나로 둠 |
+| 저장 | `motioncreator.g1.v1`, NPZ/CSV/JSON 번들 | `motionsim.g1.v1`, CSV/JSON 번들 (NPZ는 이후) | MC 프로젝트 가져오기 지원 |
+
+## 3. 아키텍처
+
+```text
+로컬 브라우저 ──(viser websocket :8080)── 편집 프로세스 (GPU 서버, env motionsim)
+                                           ├─ viser UI: 3D 뷰, 핸들·기즈모, 패널, 타임라인
+                                           ├─ Robot: Pinocchio FK + bounded least-squares IK
+                                           ├─ Motion: 프로젝트 검증, 키프레임 보간, 저장
+                                           └─ (v0.2) Scene: 물체 배치
+                                                  │ 프로젝트 스냅샷 → replay 결과
+                                                  ▼
+                                           Isaac 워커 (v0.3, 같은 env, headless 상주)
+                                           ├─ URDF → USD, 모터 특성 적용
+                                           ├─ Decoupled WBC: 하체 15 DoF 정책 + 팔 14 DoF PD
+                                           └─ 추종 오차·넘어짐·접촉 기록
+```
+
+- 편집 FK/IK는 요청마다 바로 응답한다. Isaac은 기동에 약 40초가 걸리므로 계속 띄워 두고, 작업마다 장면만 초기화한다.
+- 편집 프로세스와 Isaac 워커는 프로젝트 스냅샷(JSON)과 결과 배열로만 통신한다.
+
+## 4. 데이터 계약
+
+### 4.1 qpos
+
+- `[root xyz(3), root quaternion wxyz(4), 관절 29개]` = 36개 값. Motion Creator, Kimodo, CSV와 같다.
+- 관절 순서는 URDF revolute 선언 순서이고, 정책 MJCF `g1_gear_wbc.xml`의 hinge 순서와 같다.
+- Pinocchio 내부 표현(quaternion xyzw, 트리 순회 순서)과 Isaac DOF 순서는 **경계에서만 변환**한다. 변환은 관절 이름 기준이다.
+- viser/Three.js의 quaternion은 wxyz다. MC의 Three.js(xyzw)와 다르므로, 경계에서 순서를 명시한다.
+
+### 4.2 프로젝트 (`motionsim.g1.v1`)
+
+```jsonc
+{
+  "format": "motionsim.g1.v1",
+  "project_id": "32 hex", "created_at": "ISO 8601", "name": "",
+  "model_id": "g1 | g1-tools", "model_sha256": "URDF SHA-256", "joint_names": ["29개"],
+  "coordinate_system": "right-handed, +X forward, +Y left, +Z up",
+  "units": {"position": "m", "angle": "rad", "time": "s"},
+  "keyframes": [{"name": "", "duration": 2.0, "qpos": [], "pins": [], "angle_pins": []}],
+  "current_qpos": [], "pins": [], "angle_pins": []
+}
+```
+
+- 검증 한계는 MC와 같다. 키프레임 1–100개, duration 0.1–60 s, 총 길이 600 s 이하.
+- 호환 규칙: `joint_names`가 같아야 한다. `model_sha256`은 현재 모델이거나, g1-tools에서 g1 프로젝트를 여는 경우만 허용한다(관절이 같고 끝단만 다름).
+- MC 프로젝트(`motioncreator.g1.v1`)는 관절 순서가 같을 때 키프레임만 가져온다. 장면·파지·클립은 해당 기능이 생길 때까지 무시하고, 무시한 내용을 경고로 알린다.
+
+### 4.3 저장 번들
+
+`motions/<이름>_<id8>/`에 `project.json`, `motion.csv`(헤더 없는 qpos 36열), `metadata.json`을 원자적으로 저장한다. `motions/`는 사용자 데이터이므로 git에서 제외한다.
+
+## 5. 로드맵
+
+| 버전 | 범위 | 완료 기준 |
+|---|---|---|
+| **v0.1 기구학 편집기** | Pinocchio Robot(FK/IK), 프로젝트·보간·저장, viser 편집기(핸들 드래그, 회전, 관절 슬라이더, pin, 키프레임, 타임라인, 재생, 저장·열기), MC 프로젝트 가져오기 | MC fixture 회귀 테스트 통과, 브라우저에서 저작·재생·저장 가능 |
+| v0.2 장면 | 기본 도형과 USD/GLB 물체 배치, 그룹, 지면 고정 | 물체가 저장·복원되고 Isaac 장면 빌더 입력으로 쓸 수 있음 |
+| v0.3 Isaac + Decoupled WBC | 상주 워커, URDF→USD, 모터 특성 적용, 정책 관측 구성, replay | 저작 모션을 Isaac에서 WBC로 추종하고 결과를 편집기에서 재생 |
+| v0.4 양손 파지 | 상자 접촉면 지정, 파지 자세 맞춤, Isaac 접촉력 검증 | 상자를 들고 옮기는 모션의 접촉력·미끄러짐 기록 |
+| v0.5 내보내기 | Kimodo NPZ 등 외부 형식 | MC와 같은 NPZ 계약 |
+
+## 6. v0.1 상세
+
+### 6.1 모듈
+
+| 파일 | 책임 |
+|---|---|
+| `motionsim/robot.py` | 모델 로드, 핸들 정의, qpos 변환, FK 상태, IK(`Robot.solve`) |
+| `motionsim/motion.py` | 프로젝트 생성·검증, MC 가져오기, 보간 컴파일, 번들 저장·열기 |
+| `motionsim/app.py` | viser 편집기 UI와 상태 |
+| `tests/` | MC fixture 회귀, 프로젝트 계약, 보간 테스트 |
+
+### 6.2 편집기 동작
+
+- 핸들 구(sphere)를 클릭하면 선택되고 기즈모가 붙는다. 이동하면 위치 목표, 회전하면 방향 목표(회전 가능한 핸들만)로 IK를 푼다.
+- 드래그 중 IK는 직렬화한다. 최신 목표 하나만 남기고 이전 요청은 버린다(MC의 `pending` 방식).
+- 드래그 시작 자세가 IK의 anchor다. elastic/free 모드와 resistance를 패널에서 바꾼다.
+- 선택한 핸들의 위치 고정, 각도 고정을 토글한다. 기본은 양발 위치 고정이다.
+- 관절 슬라이더는 관절각 목표로 IK를 풀어, pin이 유지되게 한다.
+- 키프레임: 추가(선택 키프레임 뒤), 현재 자세로 갱신, 삭제, 이름·duration 편집, 선택하면 자세 불러오기.
+- 타임라인: 키프레임 마커를 표시한다. 마커를 드래그하면 duration이 바뀌고, 프레임을 클릭하면 보간 자세를 보여 준다.
+- 재생: 30 FPS 컴파일 결과를 재생한다. 재생 중에는 편집을 잠근다.
+
+### 6.3 알려진 한계 (v0.1)
+
+- 기구학 결과일 뿐이다. 균형·충돌·토크는 v0.3 Isaac 검증에서 본다.
+- undo/redo와 다중 선택, 좌우 미러는 v0.1에 포함하지 않는다.
+- 단일 사용자 기준이다. 여러 브라우저가 붙으면 같은 편집 상태를 공유한다.
+
+## 7. Motion Creator 모델과의 차이 (2026-09-28 확인)
+
+IK·보간 알고리즘은 MC와 같다. 동등성은 `tests/test_motioncreator_parity.py`가 확인한다. 이 테스트의 기준값은 **MC 코드를 motion-sim과 같은 URDF로 만든 MuJoCo 모델 위에서 실행한 결과**다(`tests/fixtures/make_motioncreator_reference.py`). MC가 실제로 쓰던 모델은 아래처럼 달라서, 알고리즘 비교에는 쓸 수 없기 때문이다.
+
+| 항목 | MC | motion-sim | 영향 |
+|---|---|---|---|
+| 기본 g1 모델 | `assets/g1/g1.xml`: `waist_roll_link` z 0.035, `torso_link` z 0.019 | unitree_ros rev_1_0 URDF: `waist_roll_joint` z 0.044, `waist_pitch_joint` z 0 | 허리 pitch 축이 10 mm 다르다. 허리를 움직이면 상체 핸들이 최대 약 11 mm 달라진다. 어깨의 영점 위치는 같다. 정책 학습 모델 `g1_gear_wbc.xml`은 motion-sim과 같은 rev_1_0이다. |
+| g1-tools 도구 좌우 | `tool_model.py`가 도구를 y축으로 미러링하고 부모 손목을 바꾼다. **주걱 = 왼손**, 끝단 받침 = 오른손 | URDF 그대로. **주걱 = 오른손**, 끝단 받침 = 왼손 | 손 TCP 핸들이 약 48.7 mm 다르다. MC g1-tools 프로젝트를 가져오면 도구가 반대 손에 있다. |
+
+MC 프로젝트를 가져오면 관절각(qpos)을 그대로 쓴다. 다리와 발은 두 모델이 같으므로 발 고정은 유지되고, 상체 핸들 위치만 위 차이만큼 달라질 수 있다.
+
+## 8. 리스크
+
+| 리스크 | 대응 |
+|---|---|
+| MC MJCF와 unitree URDF의 기구학 차이 | 7절에 기록. 알고리즘 회귀는 같은 URDF 기준 fixture로 비교 |
+| g1-tools 도구 좌우가 MC와 반대 | URDF(주걱=오른손)를 기준으로 한다. 실물 장착 방향을 사용자에게 확인 |
+| 정책 학습 모델과 URDF의 질량·토크 차이 | `integrations/robot-models.json`의 `isaac_actuators` 결정을 따른다. sim2real 전에 실물 토크 한계 확인 |
+| MuJoCo 관절 마찰·damping을 PhysX로 옮길 때 모델 차이 | v0.3에서 단순 궤적으로 MuJoCo(MC)와 Isaac 추종 결과 비교 |
+| websockets 버전 충돌(Isaac 12.0 vs viser 15.x) | headless 물리 검증됨. 문제 시 편집기 env와 Isaac env 분리 |
+| viser fork 의존 | commit 고정, Apache-2.0 |
