@@ -6,3 +6,6 @@ external/
 
 # 커스텀 그리퍼(g1-tools) 자산은 공개 저장소에 올리지 않는다. 서버에 수동으로 두고 SHA-256으로 검증한다.
 assets/g1_scoop_endsupport/
+
+# 사용자가 저장한 모션 프로젝트
+motions/
