@@ -1,0 +1,8 @@
+{
+ "source": "motioncreator decoupled_wbc.DecoupledSimulation, auto mode, g1_gear_wbc.xml",
+ "motioncreator_revision": "2565346",
+ "seconds": 8.0,
+ "steps": 1600,
+ "phase": "playing",
+ "frames": 200
+}

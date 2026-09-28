@@ -17,6 +17,9 @@ mkdir -p "$target_root"
 cp "$asset_root/g1_gear_wbc.xml" "$asset_root/g1_gear_wbc.yaml" "$target_root/"
 cp "$asset_root/policy/GR00T-WholeBodyControl-Balance.onnx" "$asset_root/policy/GR00T-WholeBodyControl-Walk.onnx" "$target_root/"
 cp "$source_root/LICENSE" "$target_root/LICENSE"
+# The reference MJCF (MuJoCo validation backend) loads these meshes; they are not hashed.
+rm -rf "$target_root/meshes"
+cp -a "$asset_root/meshes" "$target_root/meshes"
 
 python scripts/verify_assets.py --only decoupled-wbc
 echo "Decoupled WBC 자산 준비 완료: $target_root"
