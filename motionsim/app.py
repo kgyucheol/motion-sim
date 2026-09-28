@@ -6,6 +6,8 @@ Run on the GPU server and open http://<server>:8080 in a local browser:
 import argparse
 import copy
 import html
+import signal
+import sys
 import threading
 import time
 from pathlib import Path
@@ -15,6 +17,7 @@ import numpy as np
 import trimesh
 import viser
 
+from .isaac_client import IsaacWorker
 from .motion import (DEFAULT_MOTIONS_DIR, MAX_DURATION, MIN_DURATION, compile_motion, keyframe_times,
                      list_saved, load_project, new_project, save_bundle)
 from .robot import ANGLE_LOCKABLE, FEET, HANDLES, ROTATABLE, Robot
@@ -45,7 +48,13 @@ HELP = """
 - **이동·회전**: 기즈모의 화살표를 끌면 이동, 고리를 끌면 회전합니다. 전신 IK가 고정을 지키며 자세를 맞춥니다.
 - **키프레임**: `키프레임` 탭에서 현재 자세를 추가합니다. 하단 타임라인의 마커를 끌면 구간 시간이 바뀌고, 눈금을 누르면 그 시점의 보간 자세가 나옵니다.
 - **관절**: `관절` 탭 슬라이더로 개별 관절각을 바꿉니다. 고정된 부위는 유지됩니다.
-- 결과는 기구학 자세입니다. 균형과 토크는 Isaac 검증(v0.3)에서 확인합니다.
+- 편집 결과는 기구학 자세입니다. 균형과 추종은 `검증` 탭에서 Isaac 물리로 확인합니다.
+"""
+ISAAC_HELP = """
+Isaac Sim 물리에서 **GR00T Decoupled WBC**로 현재 키프레임 모션을 추종합니다.
+다리와 허리는 정책(Balance/Walk)이, 팔은 저작 궤적 PD가 제어합니다. 루트 궤적은 걷기 속도 명령으로 바뀝니다.
+처음 2초는 정책이 자세를 잡는 준비 구간이고, 그 뒤 모션을 재생합니다.
+워커는 한 번 띄우면 계속 재사용합니다(첫 시작 약 40초).
 """
 
 
@@ -74,7 +83,7 @@ def display_mesh(path, full):
 
 
 class Editor:
-    def __init__(self, server: viser.ViserServer, robot: Robot, motions_dir: Path, full_meshes=False):
+    def __init__(self, server: viser.ViserServer, robot: Robot, motions_dir: Path, full_meshes=False, isaac_port=8091):
         self.server, self.robot, self.motions_dir = server, robot, Path(motions_dir)
         self.lock = threading.RLock()
         self.project = new_project(robot)
@@ -93,6 +102,8 @@ class Editor:
         self._ik_condition = threading.Condition()
         self._message = ('info', '준비되었습니다.')
         self._ik_summary = ''
+        self.isaac = IsaacWorker(robot.model_id, port=isaac_port, on_state=self._on_isaac_state)
+        self.isaac_result = None
 
         self._build_scene(full_meshes)
         self._build_gui()
@@ -398,6 +409,19 @@ class Editor:
                                                 initial_value=float(np.clip(np.rad2deg(self.q[7 + index]), lower, upper)))
                         slider.on_update(by_user(lambda name=name: self._on_joint_slider(name)))
                         self.joint_sliders[name] = slider
+
+        with tabs.add_tab('검증', icon=viser.Icon.CHECK):
+            gui.add_markdown(ISAAC_HELP)
+            self.gui_isaac_state = gui.add_markdown('**Isaac 워커**: 꺼짐')
+            self.gui_isaac_start = gui.add_button('Isaac 워커 시작', icon=viser.Icon.PLAYER_PLAY)
+            self.gui_isaac_start.on_click(lambda _event: self.isaac.start())
+            self.gui_isaac_run = gui.add_button('현재 모션을 Isaac WBC로 검증', icon=viser.Icon.CHECK, color='green', disabled=True)
+            self.gui_isaac_run.on_click(lambda _event: self._run_isaac())
+            self.gui_isaac_progress = gui.add_progress_bar(0., visible=False, animated=True)
+            self.gui_isaac_result = gui.add_html('')
+            self.gui_isaac_replay = gui.add_button('물리 결과 재생', icon=viser.Icon.PLAYER_PLAY, disabled=True)
+            self.gui_isaac_replay.on_click(lambda _event: self._replay_isaac())
+            gui.add_button('정지', icon=viser.Icon.PLAYER_STOP).on_click(lambda _event: self._stop())
 
         with tabs.add_tab('파일', icon=viser.Icon.FOLDER):
             gui.add_markdown(f'모델 **{self.robot.model_id}** · `{self.robot.urdf_path.name}`')
@@ -775,6 +799,85 @@ class Editor:
     def _stop(self):
         self.playing = False
 
+    # ------------------------------------------------------------ Isaac check
+    def _on_isaac_state(self, state, detail):
+        labels = {'stopped': '꺼짐', 'starting': '시작 중', 'ready': '준비됨', 'running': '계산 중', 'failed': '실패'}
+        self.gui_isaac_state.content = f'**Isaac 워커**: {labels.get(state, state)}' + (f' · {detail}' if detail else '')
+        self.gui_isaac_start.disabled = state in ('starting', 'ready', 'running')
+        self.gui_isaac_run.disabled = state != 'ready'
+        if state == 'failed':
+            self._status(detail, 'error')
+
+    def _run_isaac(self):
+        if self.playing or self.isaac.state != 'ready':
+            return
+        project = copy.deepcopy(self._snapshot())
+        try:
+            compile_motion(self.robot, copy.deepcopy(project), FPS)   # surface authoring errors before Isaac
+        except ValueError as error:
+            self._status(f'모션을 만들 수 없어 검증하지 않았습니다: {error}', 'error')
+            return
+        self.gui_isaac_progress.value, self.gui_isaac_progress.visible = 0., True
+        self.gui_isaac_replay.disabled = True
+        self._status('Isaac에서 WBC 추종을 계산하고 있습니다.')
+        threading.Thread(target=self._isaac_job, args=(project,), daemon=True).start()
+
+    def _isaac_job(self, project):
+        try:
+            result = self.isaac.run(project, lambda value: setattr(self.gui_isaac_progress, 'value', round(100 * value, 1)))
+        except RuntimeError as error:
+            self._status(str(error), 'error')
+            return
+        finally:
+            self.gui_isaac_progress.visible = False
+        if result['type'] != 'result':
+            self._status(f'Isaac 검증 실패: {result.get("message")}', 'error')
+            return
+        self.isaac_result = result
+        self.gui_isaac_result.content = self._isaac_report(result)
+        self.gui_isaac_replay.disabled = False
+        summary = result['summary']
+        if summary['fell']:
+            self._status('Isaac 검증: 로봇이 넘어졌습니다. 결과를 재생해 넘어지는 지점을 확인하세요.', 'error')
+        else:
+            self._status('Isaac 검증: 넘어지지 않고 모션을 끝까지 추종했습니다.', 'ok')
+
+    def _isaac_report(self, result):
+        s = result['summary']
+        moved = max(0., s['seconds'] - s['settle_seconds'])
+        verdict = (f'<b style="color:{MESSAGE_COLORS["error"]}">낙상</b> · 준비 후 {moved:.2f}초 지점'
+                   if s['fell'] else f'<b style="color:{MESSAGE_COLORS["ok"]}">완주</b> · 모션 {s["motion_seconds"]:.2f}초 + 유지')
+        rows = [('결과', verdict),
+                ('팔 추종', f'RMSE {s["upper_rmse_deg"]:.2f}° · 최대 {s["upper_max_deg"]:.2f}°'),
+                ('다리·허리', f'RMSE {s["lower_rmse_deg"]:.2f}° (정책이 걸음을 만들므로 저작 자세와 다를 수 있음)'),
+                ('루트 위치', f'최대 오차 {s.get("max_root_error_m", 0.):.3f} m · yaw 최대 오차 {s.get("max_yaw_error_deg", 0.):.1f}°'),
+                ('조건', f'Isaac Sim 물리 {1 / result["settings"]["physics_dt"]:.0f} Hz · 정책 50 Hz · 모델 {html.escape(self.robot.model_id)}')]
+        table = ''.join(f'<tr><td style="color:#57606a;padding:2px 10px 2px 0;white-space:nowrap;vertical-align:top">{k}</td>'
+                        f'<td>{v}</td></tr>' for k, v in rows)
+        return f'<div style="font-size:13px;line-height:1.5"><table style="border-collapse:collapse">{table}</table></div>'
+
+    def _replay_isaac(self):
+        if self.playing or self.isaac_result is None:
+            return
+        self.select(None)
+        self.playing = True
+        self._status('Isaac 물리 결과를 재생합니다 (준비 2초 포함).')
+        threading.Thread(target=self._replay_loop, args=(self.isaac_result['frames'],), daemon=True).start()
+
+    def _replay_loop(self, frames):
+        start = time.perf_counter()
+        for frame in frames:
+            if not self.playing:
+                break
+            self.show(np.asarray(frame['qpos']))
+            self.server.timeline.set_current_frame(round(frame['motion_time'] * FPS))
+            delay = start + frame['time'] - time.perf_counter()
+            if delay > 0:
+                time.sleep(delay)
+        self.playing = False
+        self.show(self.q)
+        self._status('Isaac 결과 재생을 마쳤습니다.')
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -783,11 +886,21 @@ def main():
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--motions-dir', type=Path, default=DEFAULT_MOTIONS_DIR)
     parser.add_argument('--full-meshes', action='store_true', help='표시용 메시를 줄이지 않고 원본 그대로 보냅니다')
+    parser.add_argument('--isaac', action='store_true', help='시작할 때 Isaac 워커도 함께 띄웁니다')
+    parser.add_argument('--isaac-port', type=int, default=8091)
     args = parser.parse_args()
     server = viser.ViserServer(host=args.host, port=args.port, label='motion-sim')
-    Editor(server, Robot(args.model), args.motions_dir, full_meshes=args.full_meshes)
-    while True:
-        time.sleep(3600)
+    editor = Editor(server, Robot(args.model), args.motions_dir, full_meshes=args.full_meshes, isaac_port=args.isaac_port)
+    if args.isaac:
+        editor.isaac.start()
+    # viser swallows the default SIGINT handling; stop the Isaac worker explicitly on shutdown signals.
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, lambda *_: sys.exit(0))
+    try:
+        while True:
+            time.sleep(3600)
+    finally:
+        editor.isaac.stop()
 
 
 if __name__ == '__main__':

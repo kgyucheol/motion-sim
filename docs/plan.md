@@ -71,13 +71,15 @@ Unitree G1 29-DoF의 키프레임 모션을 브라우저에서 편집한다. 물
 
 ## 5. 로드맵
 
-| 버전 | 범위 | 완료 기준 |
-|---|---|---|
-| **v0.1 기구학 편집기** | Pinocchio Robot(FK/IK), 프로젝트·보간·저장, viser 편집기(핸들 드래그, 회전, 관절 슬라이더, pin, 키프레임, 타임라인, 재생, 저장·열기), MC 프로젝트 가져오기 | MC fixture 회귀 테스트 통과, 브라우저에서 저작·재생·저장 가능 |
-| v0.2 장면 | 기본 도형과 USD/GLB 물체 배치, 그룹, 지면 고정 | 물체가 저장·복원되고 Isaac 장면 빌더 입력으로 쓸 수 있음 |
-| v0.3 Isaac + Decoupled WBC | 상주 워커, URDF→USD, 모터 특성 적용, 정책 관측 구성, replay | 저작 모션을 Isaac에서 WBC로 추종하고 결과를 편집기에서 재생 |
-| v0.4 양손 파지 | 상자 접촉면 지정, 파지 자세 맞춤, Isaac 접촉력 검증 | 상자를 들고 옮기는 모션의 접촉력·미끄러짐 기록 |
-| v0.5 내보내기 | Kimodo NPZ 등 외부 형식 | MC와 같은 NPZ 계약 |
+순서는 v0.1 → v0.3 → v0.2 → v0.4 → v0.5로 바꿨다(2026-09-28). 가장 큰 리스크인 Isaac·WBC를 먼저 확인하기 위해서다.
+
+| 버전 | 범위 | 완료 기준 | 상태 |
+|---|---|---|---|
+| **v0.1 기구학 편집기** | Pinocchio Robot(FK/IK), 프로젝트·보간·저장, viser 편집기(핸들 드래그, 회전, 관절 슬라이더, pin, 키프레임, 타임라인, 재생, 저장·열기), MC 프로젝트 가져오기 | MC fixture 회귀 테스트 통과, 브라우저에서 저작·재생·저장 가능 | 완료. UI 개편, 실행 취소 포함 |
+| **v0.3 Isaac + Decoupled WBC** | 상주 워커, URDF 가져오기, 모터 특성 적용, 정책 관측 구성, replay | 저작 모션을 Isaac에서 WBC로 추종하고 결과를 편집기에서 재생 | 완료. 7절 |
+| v0.2 장면 | 기본 도형과 USD/GLB 물체 배치, 그룹, 지면 고정 | 물체가 저장·복원되고 Isaac 장면 빌더 입력으로 쓸 수 있음 | 다음 |
+| v0.4 양손 파지 | 상자 접촉면 지정, 파지 자세 맞춤, Isaac 접촉력 검증 | 상자를 들고 옮기는 모션의 접촉력·미끄러짐 기록 | |
+| v0.5 내보내기 | Kimodo NPZ 등 외부 형식 | MC와 같은 NPZ 계약 | |
 
 ## 6. v0.1 상세
 
@@ -103,11 +105,56 @@ Unitree G1 29-DoF의 키프레임 모션을 브라우저에서 편집한다. 물
 
 ### 6.3 알려진 한계 (v0.1)
 
-- 기구학 결과일 뿐이다. 균형·충돌·토크는 v0.3 Isaac 검증에서 본다.
-- undo/redo와 다중 선택, 좌우 미러는 v0.1에 포함하지 않는다.
+- 기구학 결과일 뿐이다. 균형·추종은 v0.3 Isaac 검증에서 본다.
+- 다중 선택과 좌우 미러는 아직 없다. 실행 취소·다시 실행은 추가했다(100단계).
 - 단일 사용자 기준이다. 여러 브라우저가 붙으면 같은 편집 상태를 공유한다.
+- 표시용 메시는 약 27%로 줄여 보낸다(`--full-meshes`로 원본). IK와 Isaac은 원본 URDF를 쓴다.
 
-## 7. Motion Creator 모델과의 차이 (2026-09-28 확인)
+## 7. v0.3 Isaac + Decoupled WBC
+
+### 7.1 구조
+
+| 파일 | 책임 |
+|---|---|
+| `motionsim/wbc.py` | 물리 엔진과 무관한 제어기. 하체 15 DoF는 Balance/Walk ONNX(50 Hz) → PD 토크(200 Hz), 팔 14 DoF는 저작 궤적 PD + 편향 토크, 루트 궤적 → 속도·yaw rate·높이 명령, 허리 관절 → torso RPY 명령, 낙상 판정, 25 Hz 기록 |
+| `motionsim/sim_isaac.py` | Isaac 백엔드. URDF 가져오기, 관절 속성 작성, 상태 읽기(루트 각속도는 루트 좌표계), 팔 편향 토크는 같은 URDF로 Pinocchio RNEA |
+| `motionsim/sim_mujoco.py` | 검증 전용 MuJoCo 백엔드(정책 모델 `g1_gear_wbc.xml`) |
+| `motionsim/isaac_worker.py`, `isaac_client.py` | 상주 워커(Isaac 한 번 기동, 작업마다 reset)와 편집기 쪽 연결. 워커는 편집기가 끝나면 스스로 종료 |
+| 편집기 `검증` 탭 | 워커 시작, 현재 모션 검증, 진행률, 결과 카드(완주/낙상, 추종 오차), 물리 결과 재생 |
+
+제어기 호출 규약: 물리 스텝마다 `compute_torques(state, arm_bias)` → 스텝 → `after_step(state)`. `state`는 motion-sim 규약(qpos wxyz, URDF 관절 순서, 루트 각속도는 루트 좌표계)이다. Isaac의 DOF 순서는 관절 이름으로 매핑한다.
+
+### 7.2 검증 결과 (2026-09-28)
+
+1. **제어기 이식**: Motion Creator `DecoupledSimulation`(MuJoCo)을 직접 실행한 기준값(서기 → 손 뻗기 → 0.3 m 걷기 + yaw 20°, 8 s, 1600 스텝)과 같은 모델에서 비교했다. 궤적 차이는 1e-5 미만이다(`tests/test_wbc.py`).
+2. **Isaac vs MuJoCo** (같은 제어기, 같은 모션, `scripts/sim2sim_check.py`, `pytest -m isaac`):
+
+| | MuJoCo (정책 모델) | Isaac g1 | Isaac g1-tools |
+|---|---|---|---|
+| 8 s 완주 | 예 | 예 | 예 |
+| 최종 루트 xy (목표 0.3, 0) | (0.312, −0.004) | (0.290, 0.008) | (0.292, −0.014) |
+| 최종 yaw (목표 20°) | 18.8° | 18.7° | 18.8° |
+| 팔 추종 RMSE | 0.44° | 0.31° | 3.18° |
+
+Isaac–MuJoCo 궤적 차이(g1): 루트 최대 3.8 cm, 관절 RMSE 1.6°. 다리 RMSE 약 14°는 두 엔진이 같다. 다리는 정책이 걸음을 만들기 때문이며 추종 실패가 아니다.
+
+### 7.3 발견한 문제와 결정
+
+- **armature는 USD로 작성해야 한다.** Isaac tensor API(`set_armatures`)로 실행 중에 넣은 값은 읽을 수는 있지만 동역학에 반영되지 않았다. 손목 roll 관절이 3스텝 만에 ±37 rad/s로 발산했다. 시뮬레이션 시작 전에 `PhysxJointAPI.armature`로 작성하면 안정적이다. 같은 이유로 관절 최대 토크, 드라이브 게인(0), 속도 한계도 USD로 작성한다.
+- URDF의 관절 속도 한계(37 rad/s)는 없앴다. MuJoCo에는 속도 한계가 없다.
+- MuJoCo의 관절 dry friction(0.1 Nm)과 damping(0.001)은 PhysX 관절 마찰(무차원)과 모델이 달라, 명령 토크에 tanh 근사로 더한다.
+- 지면 마찰은 1.0에 `max` 결합으로 두어, 로봇 기본 재질과 평균이 되지 않게 했다. 발 충돌체는 두 모델이 같다(발마다 5 mm 구 4개).
+- g1-tools의 팔 RMSE가 더 큰 것은 도구 질량(주걱 0.42 kg 등) 때문이다. 팔 편향 토크는 같은 URDF로 계산해 보상한다.
+- 워커 기동은 캐시가 데워진 뒤 약 10초, 6초 분량 모션 계산은 약 4초(약 1.5배속)다. 같은 입력이면 결과가 같다.
+- MuJoCo 3.12를 env에 추가했다. 이식 검증과 sim2sim 비교 전용이고, 편집과 물리 판정은 Isaac만 쓴다.
+
+### 7.4 남은 한계
+
+- 파지 힘 피드백(MC의 `grasp_force_control`)과 물체는 아직 없다(v0.2, v0.4).
+- manual 모드(키보드 명령)와 녹화 번들 저장은 아직 없다.
+- 결과는 이 모델·파라미터·CPU 정책 추론에 대한 시뮬레이션이다. 실기 안전을 보장하지 않는다.
+
+## 8. Motion Creator 모델과의 차이 (2026-09-28 확인)
 
 IK·보간 알고리즘은 MC와 같다. 동등성은 `tests/test_motioncreator_parity.py`가 MC 코드로 만든 기준값과 비교해 확인한다(`tests/fixtures/make_motioncreator_reference.py`).
 
@@ -118,13 +165,14 @@ IK·보간 알고리즘은 MC와 같다. 동등성은 `tests/test_motioncreator_
 
 MC g1 프로젝트를 가져오면 관절각(qpos)을 그대로 쓴다. 다리와 발은 두 모델이 같아 발 고정은 유지되고, 허리를 굽힌 자세에서는 상체 핸들 위치가 최대 약 11 mm 달라질 수 있다. MC g1-tools 프로젝트는 기구학이 같다.
 
-## 8. 리스크
+## 9. 리스크
 
 | 리스크 | 대응 |
 |---|---|
-| MC MJCF와 unitree URDF의 기구학 차이 | 7절에 기록. 알고리즘 회귀는 같은 URDF 기준 fixture로 비교 |
+| MC MJCF와 unitree URDF의 기구학 차이 | 8절에 기록. 알고리즘 회귀는 같은 URDF 기준 fixture로 비교 |
 | 그리퍼 생성기의 메시 비결정성 | 같은 옵션으로 다시 만들면 URDF는 같지만 끝단 받침 본체 STL 하나가 바이트 단위로 다를 수 있다. 해시 검증은 URDF 기준 |
 | 정책 학습 모델과 URDF의 질량·토크 차이 | `integrations/robot-models.json`의 `isaac_actuators` 결정을 따른다. sim2real 전에 실물 토크 한계 확인 |
-| MuJoCo 관절 마찰·damping을 PhysX로 옮길 때 모델 차이 | v0.3에서 단순 궤적으로 MuJoCo(MC)와 Isaac 추종 결과 비교 |
+| MuJoCo 관절 마찰·damping을 PhysX로 옮길 때 모델 차이 | 명령 토크에 근사로 더한다. 걷기 포함 모션에서 Isaac–MuJoCo 결과 비교(7.2절), `pytest -m isaac`로 회귀 확인 |
+| 공유 GPU 서버에서 Isaac 워커가 남는 문제 | 워커가 편집기 프로세스를 감시해 편집기가 끝나면 스스로 종료. 워커는 버튼이나 `--isaac`으로만 시작 |
 | websockets 버전 충돌(Isaac 12.0 vs viser 15.x) | headless 물리 검증됨. 문제 시 편집기 env와 Isaac env 분리 |
 | viser fork 의존 | commit 고정, Apache-2.0 |
